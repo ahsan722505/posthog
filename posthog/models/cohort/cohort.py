@@ -80,6 +80,7 @@ class Cohort(models.Model):
     version: models.IntegerField = models.IntegerField(blank=True, null=True)
     pending_version: models.IntegerField = models.IntegerField(blank=True, null=True)
     count: models.IntegerField = models.IntegerField(blank=True, null=True)
+    post_to_webhook: models.BooleanField = models.BooleanField(default=False)
 
     created_by: models.ForeignKey = models.ForeignKey("User", on_delete=models.SET_NULL, blank=True, null=True)
     created_at: models.DateTimeField = models.DateTimeField(default=timezone.now, blank=True, null=True)
@@ -192,6 +193,8 @@ class Cohort(models.Model):
     def calculate_people_ch(self, pending_version):
         from posthog.models.cohort.util import recalculate_cohortpeople
         from posthog.tasks.calculate_cohort import clear_stale_cohort
+        from posthog.models.cohort.util import call_webhook_on_cohort_update
+        from posthog.models.cohort.util import get_cohort_size
 
         logger.warn(
             "cohort_calculation_started",
@@ -201,12 +204,16 @@ class Cohort(models.Model):
         )
         start_time = time.monotonic()
 
+        before_count = get_cohort_size(self)
+
         try:
             count = recalculate_cohortpeople(self, pending_version)
             self.count = count
 
             self.last_calculation = timezone.now()
             self.errors_calculating = 0
+            if count != before_count and self.post_to_webhook:
+                call_webhook_on_cohort_update(before_count, count, self)
         except Exception:
             self.errors_calculating = F("errors_calculating") + 1
             logger.warning(
